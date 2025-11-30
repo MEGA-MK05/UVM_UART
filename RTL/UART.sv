@@ -1,288 +1,280 @@
-module uart(clk,rst,rx,tx_data_in,start,rx_data_out,tx,tx_active,done_tx);
+`timescale 1ns / 1ps
 
-parameter clk_freq = 50000000; //MHz
-parameter baud_rate = 19200; //bits per second
-parameter clock_divide = (clk_freq/baud_rate);
+module uart (
+    input logic       clk,
+    input logic       reset,
+    input logic       start,
+    input logic [7:0] tx_data,
+    input logic       rx,
 
-  input clk,rst; 
-  input rx;
-  input [7:0] tx_data_in;
-  input start;
-  output tx; 
-  output [7:0] rx_data_out;
-  output tx_active;
-  output done_tx;
-	
-	
-uart_rx 
-       #(.clk_freq(clk_freq),
-	 .baud_rate(baud_rate)
-	)
-      receiver
-             (
-              .clk(clk),
-	      .rst(rst),
-	      .rx(rx),
-	      .rx_data_out(rx_data_out)
-             );
+    output logic tx_busy,
+    output logic tx_done,
+    output logic rx_done,
+    output logic [7:0] rx_data,
+    output logic tx
+);
+    logic br_tick;
 
-
-uart_tx 
-       #(.clk_freq(clk_freq),
-	 .baud_rate(baud_rate)
-        )
-      transmitter			 
-               (               
-                .clk(clk),
-		.rst(rst),
-		.start(start),
-		.tx_data_in(tx_data_in),
-		.tx(tx),
-		.tx_active(tx_active),
-		.done_tx(done_tx)
-               );
+    baudrate_gen U_BAUD_GEN (
+        .clk    (clk),
+        .reset  (reset),
+        .br_tick(br_tick)
+    );
+    transmitter U_Transmitter (
+        .clk    (clk),
+        .reset  (reset),
+        .br_tick(br_tick),
+        .start  (start),
+        .tx_data(tx_data),
+        .tx_busy(tx_busy),
+        .tx_done(tx_done),
+        .tx     (tx)
+    );
+    receiver U_Reciever (
+        .clk    (clk),
+        .rst    (reset),
+        .tick   (br_tick),
+        .rx     (rx),
+        .rx_done(rx_done),
+        .rx_data(rx_data)
+    );
 
 endmodule
 
+module baudrate_gen (
+    input  logic clk,
+    input  logic reset,
+    output logic br_tick
+);
+    logic [$clog2(100_000_000/9600/16)-1:0] br_counter;
+  //localparam int div =  100_000_000 / 9600 / 16 ;
+  localparam int div = 100;
 
-
-
-
-module uart_rx(clk,rst,rx,rx_data_out);
-
-parameter clk_freq = 50000000; //MHz
-parameter baud_rate = 19200; //bits per second
-input clk;
-input rst;
-input rx;
-output [7:0] rx_data_out;
-
-localparam clock_divide = (clk_freq/baud_rate);
-
-enum bit [2:0] { rx_IDLE = 3'b000,
-                 rx_START = 3'b001,
-		 rx_DATA = 3'b010,
-		 rx_STOP = 3'b011,
-		 rx_DONE = 3'b100 } rx_STATE, rx_NEXT;
-					 
-logic [11:0] clk_div_reg,clk_div_next;
-logic [7:0] rx_data_reg,rx_data_next;
-logic [2:0] index_bit_reg,index_bit_next;
-
-
-always_ff @(posedge clk) begin
-if(rst) begin
-rx_STATE <= rx_IDLE;
-clk_div_reg <= 0;
-rx_data_reg <= 0;
-index_bit_reg <= 0;
-end
-else begin
-rx_STATE <= rx_NEXT;
-clk_div_reg <= clk_div_next;
-rx_data_reg <= rx_data_next;
-index_bit_reg <= index_bit_next;
-end
-end
-
-always @(*) begin
-rx_NEXT = rx_STATE;
-clk_div_next = clk_div_reg;
-rx_data_next = rx_data_reg;
-index_bit_next = index_bit_reg;
-
-case(rx_STATE)					 
-
-rx_IDLE: begin
-clk_div_next = 0;
-index_bit_next = 0;
-if(rx == 0) begin
-rx_NEXT = rx_START;
-end
-else begin
-rx_NEXT = rx_IDLE;
-end
-end
-
-rx_START: begin
-if(clk_div_reg == (clock_divide-1)/2) begin
-if(rx == 0) begin
-clk_div_next = 0;
-rx_NEXT = rx_DATA;
-end
-else begin
-rx_NEXT = rx_IDLE;
-end
-end
-else begin
-clk_div_next = clk_div_reg + 1'b1;
-rx_NEXT = rx_START;
-end
-end
-
-rx_DATA: begin
-if(clk_div_reg < clock_divide-1) begin
-clk_div_next = clk_div_reg + 1'b1;
-rx_NEXT = rx_DATA;
-end
-else begin
-clk_div_next = 0;
-rx_data_next[index_bit_reg] = rx;
-if(index_bit_reg < 7) begin
-index_bit_next = index_bit_reg + 1'b1;
-rx_NEXT = rx_DATA;
-end
-else begin
-index_bit_next = 0;
-rx_NEXT = rx_STOP;
-end
-end
-end
-
-rx_STOP: begin
-if(clk_div_reg < clock_divide - 1) begin
-clk_div_next = clk_div_reg + 1'b1;
-rx_NEXT = rx_STOP;
-end
-else begin
-clk_div_next = 0;
-rx_NEXT = rx_DONE;
-end
-end
-
-rx_DONE: begin
-rx_NEXT = rx_IDLE;
-end
-
-default: rx_NEXT = rx_IDLE;
-endcase
-end
-
-assign rx_data_out = rx_data_reg;
-
+    always_ff @(posedge clk, posedge reset) begin
+        if (reset) begin
+            br_counter <= 0;
+            br_tick <= 0;
+        end else begin
+          if (br_counter == div-1) begin
+                br_counter <= 0;
+                br_tick <= 1;
+            end else begin
+                br_counter <= br_counter + 1;
+                br_tick <= 0;
+            end
+        end
+    end
 endmodule
 
+module receiver (
+    input clk,
+    input rst,
+    input tick,
+    input rx,
+    output rx_done,
+    output [7:0] rx_data
+);
+    typedef enum {
+        IDLE,
+        START,
+        DATA,
+        STOP
+    } rx_state_e;
 
+    rx_state_e rx_state, rx_next_state;
 
-module uart_tx(clk,rst,start,tx_data_in,tx,tx_active,done_tx);
+    logic rx_done_reg, rx_done_next;
+    logic [3:0] bit_count_reg, bit_count_next;
+    logic [4:0] tick_count_reg, tick_count_next;
+    logic [7:0] rx_data_reg, rx_data_next;
 
-parameter clk_freq = 50000000; //MHz
-parameter baud_rate = 19200; //bits per second
-input clk,rst;
-input start;
-input [7:0] tx_data_in;
-output tx;
-output tx_active;
-output logic done_tx;
+    assign rx_done = rx_done_reg;
+    assign rx_data = rx_data_reg;
 
-localparam clock_divide = (clk_freq/baud_rate);
+    always_ff @(posedge clk, posedge rst) begin
+        if (rst) begin
+            rx_state       <= IDLE;
+            rx_done_reg    <= 0;
+            rx_data_reg    <= 0;
+            bit_count_reg  <= 0;
+            tick_count_reg <= 0;
+        end else begin
+            rx_state       <= rx_next_state;
+            rx_done_reg    <= rx_done_next;
+            rx_data_reg    <= rx_data_next;
+            bit_count_reg  <= bit_count_next;
+            tick_count_reg <= tick_count_next;
+        end
+    end
 
-enum bit [2:0]{ tx_IDLE = 3'b000,
-                tx_START = 3'b001,
-		tx_DATA = 3'b010,
-	        tx_STOP = 3'b011,
-		tx_DONE = 3'b100 } tx_STATE, tx_NEXT;
-					 
-logic [11:0] clk_div_reg,clk_div_next;
-logic [7:0] tx_data_reg, tx_data_next;
-logic tx_out_reg,tx_out_next;
-logic [2:0] index_bit_reg,index_bit_next;
+    always_comb begin
+        rx_next_state = rx_state;
+        tick_count_next = tick_count_reg;
+        bit_count_next = bit_count_reg;
+        rx_done_next = rx_done_reg;
+        rx_data_next = rx_data_reg;
+        case (rx_state)
+            IDLE: begin
+                tick_count_next = 0;
+                bit_count_next = 0;
+                rx_done_next = 1'b0;
+                if (rx == 1'b0) begin
+                    rx_next_state = START;
+                end
+            end
+            START: begin
+                if (tick == 1'b1) begin
+                    if (tick_count_reg == 7) begin
+                        rx_next_state   = DATA;
+                        tick_count_next = 0;
+                    end else begin
+                        tick_count_next = tick_count_reg + 1;
+                        rx_next_state   = START;
+                    end
+                end
+            end
+            DATA: begin
+                if (tick == 1'b1) begin
+                    if (tick_count_reg == 15) begin
+                        rx_data_next = {rx, rx_data_reg[7:1]};
+                        if (bit_count_reg == 7) begin
+                            rx_next_state   = STOP;
+                            tick_count_next = 0;
+                        end else begin
+                            rx_next_state   = DATA;
+                            bit_count_next  = bit_count_reg + 1;
+                            tick_count_next = 0;
+                        end
+                    end else begin
+                        tick_count_next = tick_count_reg + 1;
+                    end
+                end
+            end
+            STOP: begin
+                if (tick == 1'b1) begin
+                    if (tick_count_reg == 23) begin  //15 + 8
+                        rx_done_next  = 1'b1;
+                        rx_next_state = IDLE;
+                    end else begin
+                        tick_count_next = tick_count_reg + 1;
+                    end
+                end
+            end
+        endcase
+    end
+endmodule
 
-assign tx_active = (tx_STATE == tx_DATA);
-assign tx = tx_out_reg;
+module transmitter (
+    input  logic       clk,
+    input  logic       reset,
+    input  logic       br_tick,
+    input  logic [7:0] tx_data,
+    input  logic       start,
+    output logic       tx_busy,
+    output logic       tx_done,
+    output logic       tx
+);
+    typedef enum {
+        IDLE,
+        START,
+        DATA,
+        STOP
+    } tx_state_e;
 
-always_ff @(posedge clk) begin
-if(rst) begin
-tx_STATE <= tx_IDLE;
-clk_div_reg <= 0;
-tx_out_reg <= 0;
-tx_data_reg <= 0;
-index_bit_reg <= 0;
-end
-else begin
-tx_STATE <= tx_NEXT;
-clk_div_reg <= clk_div_next;
-tx_out_reg <= tx_out_next;
-tx_data_reg <= tx_data_next;
-index_bit_reg <= index_bit_next;
-end
-end
+    tx_state_e tx_state, tx_next_state;
 
-always @(*) begin
-tx_NEXT = tx_STATE;
-clk_div_next = clk_div_reg;
-tx_out_next = tx_out_reg;
-tx_data_next = tx_data_reg;
-index_bit_next = index_bit_reg;
-done_tx = 0;
+    logic [7:0] temp_data_reg, temp_data_next;
+    logic [3:0] tick_cnt_reg, tick_cnt_next;
+    logic [2:0] bit_cnt_reg, bit_cnt_next;
+    logic tx_reg, tx_next, tx_busy_next, tx_busy_reg, tx_done_reg, tx_done_next;
 
-case(tx_STATE)
+    assign tx = tx_reg;
+    assign tx_busy = tx_busy_reg;
+    assign tx_done = tx_done_reg;
 
-tx_IDLE: begin
-tx_out_next = 1;
-clk_div_next = 0;
-index_bit_next = 0;
-if(start == 1) begin
-tx_data_next = tx_data_in;
-tx_NEXT = tx_START;
-end
-else begin
-tx_NEXT = tx_IDLE;
-end
-end
+    always_ff @(posedge clk, posedge reset) begin
+        if (reset) begin
+            tx_state      <= IDLE;
+            temp_data_reg <= 0;
+            tx_reg        <= 1;
+            tick_cnt_reg  <= 0;
+            bit_cnt_reg   <= 0;
+            tx_done_reg   <= 0;
+            tx_busy_reg   <= 0;
+        end else begin
+            tx_state      <= tx_next_state;
+            temp_data_reg <= temp_data_next;
+            tx_reg        <= tx_next;
+            tick_cnt_reg  <= tick_cnt_next;
+            bit_cnt_reg   <= bit_cnt_next;
+            tx_done_reg   <= tx_done_next;
+            tx_busy_reg   <= tx_busy_next;
+        end
+    end
 
-tx_START: begin
-tx_out_next = 0;
-if(clk_div_reg < clock_divide-1) begin
-clk_div_next = clk_div_reg + 1'b1;
-tx_NEXT = tx_START;
-end
-else begin
-clk_div_next = 0;
-tx_NEXT = tx_DATA;
-end
-end
-
-tx_DATA: begin
-tx_out_next = tx_data_reg[index_bit_reg];
-if(clk_div_reg < clock_divide-1) begin
-clk_div_next = clk_div_reg + 1'b1;
-tx_NEXT = tx_DATA;
-end
-else begin
-clk_div_next = 0;
-if(index_bit_reg < 7) begin
-index_bit_next = index_bit_reg + 1'b1;
-tx_NEXT = tx_DATA;
-end
-else begin
-index_bit_next = 0;
-tx_NEXT = tx_STOP; 
-end
-end
-end
-
-tx_STOP: begin
-tx_out_next = 1;
-if(clk_div_reg < clock_divide-1) begin
-clk_div_next = clk_div_reg + 1'b1;
-tx_NEXT = tx_STOP;
-end
-else begin
-clk_div_next = 0;
-tx_NEXT = tx_DONE;
-end
-end
-
-tx_DONE: begin
-done_tx = 1;
-tx_NEXT = tx_IDLE;
-end
-
-default: tx_NEXT = tx_IDLE;
-endcase
-end
-
-endmodule 
-
+    always_comb begin
+        tx_next_state  = tx_state;
+        temp_data_next = temp_data_reg;
+        tx_next        = tx_reg;
+        tick_cnt_next  = tick_cnt_reg;
+        bit_cnt_next   = bit_cnt_reg;
+        tx_done_next   = tx_done_reg;
+        tx_busy_next   = tx_busy_reg;
+        case (tx_state)
+            IDLE: begin
+                tx_next = 1;
+                tx_done_next = 0;
+                tx_busy_next = 0;
+                if (start) begin
+                    tx_next_state  = START;
+                    temp_data_next = tx_data;
+                    tick_cnt_next  = 0;
+                    bit_cnt_next   = 0;
+                    tx_busy_next   = 1;
+                end
+            end
+            START: begin
+                tx_next = 0;
+                if (br_tick) begin
+                    if (tick_cnt_reg == 15) begin
+                        tx_next_state = DATA;
+                        tick_cnt_next = 0;
+                    end else begin
+                        tick_cnt_next = tick_cnt_reg + 1;
+                    end
+                end
+            end
+            DATA: begin
+                tx_next = temp_data_reg[0];
+                if (br_tick) begin
+                    if (tick_cnt_reg == 15) begin
+                        tick_cnt_next = 0;
+                        if (bit_cnt_reg == 7) begin
+                            tx_next_state = STOP;
+                            bit_cnt_next  = 0;
+                        end else begin
+                            temp_data_next = {1'b0, temp_data_reg[7:1]};
+                            bit_cnt_next   = bit_cnt_reg + 1;
+                        end
+                    end else begin
+                        tick_cnt_next = tick_cnt_reg + 1;
+                    end
+                end
+            end
+            STOP: begin
+                tx_next = 1;
+                if (br_tick) begin
+                    if (tick_cnt_reg == 15) begin
+                        tx_next_state = IDLE;
+                        tx_done_next  = 1;
+                        tx_busy_next  = 0;
+                        tick_cnt_next = 0;
+                    end else begin
+                        tick_cnt_next = tick_cnt_reg + 1;
+                    end
+                end
+            end
+        endcase
+    end
+endmodule
 
